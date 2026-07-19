@@ -6,27 +6,41 @@ A project created with FastAPI CLI.
 
 ### Local PostgreSQL + SQLAlchemy setup
 
-1. Start PostgreSQL on localhost:
+1. Install the locked application and development dependencies:
+
+```bash
+uv sync --locked
+```
+
+2. Start PostgreSQL on localhost:
 
 ```bash
 docker compose up -d postgres
 ```
 
-2. Create your env file:
+3. Create your env file. The example matches the Compose database and explicitly
+allows the Angular development origin at `http://localhost:4200`:
 
 ```bash
 cp .env.example .env
 ```
 
-3. Start the API:
+4. Upgrade the database:
+
+```bash
+uv run alembic upgrade head
+```
+
+5. Start the API:
 
 ```bash
 uv run fastapi dev
 ```
 
-4. Verify database connection:
+6. Verify application and database health:
 
-Visit http://localhost:8000/health/db
+- http://localhost:8000/api/v1/health
+- http://localhost:8000/api/v1/health/db
 
 ### Start the development server
 
@@ -35,6 +49,14 @@ uv run fastapi dev
 ```
 
 Visit http://localhost:8000
+
+### Run tests
+
+Tests use injected database engines and do not connect to the development database.
+
+```bash
+uv run pytest
+```
 
 ### Deploy to FastAPI Cloud
 
