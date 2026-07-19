@@ -85,14 +85,14 @@ def test_allowed_cors_preflight() -> None:
         "/api/v1/health",
         headers={
             "Origin": "http://localhost:4200",
-            "Access-Control-Request-Method": "GET",
+            "Access-Control-Request-Method": "POST",
             "Access-Control-Request-Headers": "X-Test-Header",
         },
     )
 
     assert response.status_code == 200
     assert response.headers["access-control-allow-origin"] == "http://localhost:4200"
-    assert response.headers["access-control-allow-methods"] == "GET"
+    assert response.headers["access-control-allow-methods"] == "GET, POST"
     assert response.headers["access-control-allow-headers"] == "X-Test-Header"
     assert "access-control-allow-credentials" not in response.headers
 
