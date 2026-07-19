@@ -92,7 +92,7 @@ def test_allowed_cors_preflight() -> None:
 
     assert response.status_code == 200
     assert response.headers["access-control-allow-origin"] == "http://localhost:4200"
-    assert response.headers["access-control-allow-methods"] == "GET, POST"
+    assert response.headers["access-control-allow-methods"] == "GET, POST, PUT"
     assert response.headers["access-control-allow-headers"] == "X-Test-Header"
     assert "access-control-allow-credentials" not in response.headers
 
