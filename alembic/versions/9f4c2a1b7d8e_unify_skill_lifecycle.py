@@ -8,7 +8,11 @@ The upgrade consolidates case-insensitive duplicate skills and folds the legacy
 wishlist table into ``skills``. Consequently, a downgrade cannot reconstruct
 the original duplicate rows or determine which unified rows originally came
 from ``wishlist``. The compatibility downgrade therefore emits one legacy skill
-row per unified skill and recreates an empty wishlist table.
+row per unified skill, recreates an empty wishlist table, and marks the
+legacy-shaped skills table with a PostgreSQL table comment. A re-upgrade
+recognizes only that marker and preserves each downgraded skill ID independently,
+including valid archived duplicates. An ordinary initial-schema upgrade has no
+marker and continues to apply the frozen duplicate canonicalization rules.
 """
 
 from collections import defaultdict
@@ -34,6 +38,7 @@ SEED_CATEGORIES = {
     "data": (5, "Data"),
 }
 ALLOWED_STATUSES = {"wishlist", "learning", "practiced", "paused", "archived"}
+COMPATIBILITY_MARKER = "skillgraph:unified-compatibility-downgrade:9f4c2a1b7d8e"
 NORMALIZE_SQL = sa.text(
     "SELECT lower(regexp_replace(regexp_replace(CAST(:value AS text), "
     "'^[[:space:]]+|[[:space:]]+$', '', 'g'), '[[:space:]]+', ' ', 'g'))"
@@ -57,7 +62,16 @@ def _status(value: str) -> str:
     return normalized if normalized in ALLOWED_STATUSES else "practiced"
 
 
-def _source_rows(connection: Connection) -> tuple[list[dict[str, Any]], int]:
+def _is_compatibility_upgrade(connection: Connection) -> bool:
+    table_comment = connection.execute(
+        sa.text("SELECT obj_description('skills'::regclass, 'pg_class')")
+    ).scalar_one()
+    return table_comment == COMPATIBILITY_MARKER
+
+
+def _source_rows(
+    connection: Connection, preserve_compatibility_rows: bool
+) -> tuple[list[dict[str, Any]], int]:
     skill_rows = [
         {
             **dict(row),
@@ -88,10 +102,15 @@ def _source_rows(connection: Connection) -> tuple[list[dict[str, Any]], int]:
 
     reserved_names: set[str] = set()
     for row in rows:
-        display_name = _display(connection, str(row["name"]))
-        normalized_name = _normalize(connection, display_name)
+        source_name = str(row["name"])
+        collapsed_display_name = _display(connection, source_name)
+        normalized_name = _normalize(connection, source_name)
         if normalized_name:
-            row["display_name"] = display_name
+            row["display_name"] = (
+                source_name
+                if preserve_compatibility_rows and row["source"] == "skills"
+                else collapsed_display_name
+            )
             row["normalized_name"] = normalized_name
             reserved_names.add(normalized_name)
 
@@ -121,18 +140,27 @@ def _source_rows(connection: Connection) -> tuple[list[dict[str, Any]], int]:
 
 
 def _categories(
-    connection: Connection, rows: list[dict[str, Any]], captured_at: datetime
+    connection: Connection,
+    rows: list[dict[str, Any]],
+    captured_at: datetime,
+    preserve_compatibility_rows: bool,
 ) -> tuple[list[dict[str, Any]], dict[str, int]]:
     category_candidates: dict[str, list[tuple[int, int, str]]] = defaultdict(list)
     needs_uncategorized = False
 
     for row in rows:
-        display_name = _display(connection, str(row["category"]))
-        normalized_name = _normalize(connection, display_name)
+        source_category = str(row["category"])
+        collapsed_display_name = _display(connection, source_category)
+        normalized_name = _normalize(connection, source_category)
         if not normalized_name:
             needs_uncategorized = True
             row["category_normalized_name"] = "uncategorized"
             continue
+        display_name = (
+            source_category
+            if preserve_compatibility_rows and row["source"] == "skills"
+            else collapsed_display_name
+        )
         row["category_normalized_name"] = normalized_name
         category_candidates[normalized_name].append(
             (row["source_priority"], int(row["id"]), display_name)
@@ -175,6 +203,7 @@ def _skills(
     max_skill_id: int,
     category_ids: dict[str, int],
     captured_at: datetime,
+    preserve_compatibility_rows: bool,
 ) -> tuple[list[dict[str, Any]], dict[int, int]]:
     groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in rows:
@@ -192,6 +221,45 @@ def _skills(
 
     skill_rows: list[dict[str, Any]] = []
     canonical_skill_ids: dict[int, int] = {}
+    if preserve_compatibility_rows:
+        for row in sorted(
+            (row for row in rows if row["source"] == "skills"),
+            key=lambda row: row["id"],
+        ):
+            skill_id = int(row["id"])
+            status = row["mapped_status"]
+            canonical_skill_ids[skill_id] = skill_id
+            skill_rows.append(
+                {
+                    "id": skill_id,
+                    "name": row["display_name"],
+                    "category_id": category_ids[row["category_normalized_name"]],
+                    "status": status,
+                    "legacy_hours": int(row["hours"]),
+                    "created_at": captured_at,
+                    "updated_at": captured_at,
+                    "archived_at": captured_at if status == "archived" else None,
+                }
+            )
+
+        for normalized_name in wishlist_only_names:
+            canonical = min(groups[normalized_name], key=lambda row: row["id"])
+            skill_rows.append(
+                {
+                    "id": wishlist_ids[normalized_name],
+                    "name": canonical["display_name"],
+                    "category_id": category_ids[
+                        canonical["category_normalized_name"]
+                    ],
+                    "status": "wishlist",
+                    "legacy_hours": 0,
+                    "created_at": captured_at,
+                    "updated_at": captured_at,
+                    "archived_at": None,
+                }
+            )
+        return skill_rows, canonical_skill_ids
+
     for normalized_name in sorted(groups):
         group = groups[normalized_name]
         existing = sorted(
@@ -353,10 +421,19 @@ def _create_target_tables() -> tuple[sa.Table, sa.Table, sa.Table]:
 def upgrade() -> None:
     connection = op.get_bind()
     captured_at = datetime.now(timezone.utc)
-    source_rows, max_skill_id = _source_rows(connection)
-    category_rows, category_ids = _categories(connection, source_rows, captured_at)
+    preserve_compatibility_rows = _is_compatibility_upgrade(connection)
+    source_rows, max_skill_id = _source_rows(
+        connection, preserve_compatibility_rows
+    )
+    category_rows, category_ids = _categories(
+        connection, source_rows, captured_at, preserve_compatibility_rows
+    )
     skill_rows, canonical_skill_ids = _skills(
-        source_rows, max_skill_id, category_ids, captured_at
+        source_rows,
+        max_skill_id,
+        category_ids,
+        captured_at,
+        preserve_compatibility_rows,
     )
     legacy_links = connection.execute(
         sa.text("SELECT skill_id, project_id FROM skills_projects")
@@ -486,3 +563,6 @@ def downgrade() -> None:
         sa.text(f"ALTER TABLE skills ALTER COLUMN id RESTART WITH {next_skill_id}")
     )
     op.execute(sa.text("ALTER TABLE wishlist ALTER COLUMN id RESTART WITH 1"))
+    op.execute(
+        sa.text(f"COMMENT ON TABLE skills IS '{COMPATIBILITY_MARKER}'")
+    )

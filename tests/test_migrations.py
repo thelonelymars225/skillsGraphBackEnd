@@ -437,7 +437,27 @@ def test_downgrade_and_reupgrade_preserve_unified_logical_data(
     migration_engine: Engine,
 ) -> None:
     _populated_upgrade(migration_engine)
+    with migration_engine.begin() as connection:
+        connection.execute(
+            sa.text(
+                "INSERT INTO skills "
+                "(id, name, category_id, status, legacy_hours, archived_at) VALUES "
+                "(50, 'Angular', 4, 'archived', 11, CURRENT_TIMESTAMP), "
+                "(51, ' ANGULAR ', 5, 'archived', 13, CURRENT_TIMESTAMP)"
+            )
+        )
+        connection.execute(
+            sa.text(
+                "INSERT INTO skills_projects (skill_id, project_id) VALUES "
+                "(50, 3), (51, 2)"
+            )
+        )
     before = _logical_snapshot(migration_engine)
+    assert _fetch_all(
+        migration_engine,
+        "SELECT id, status, legacy_hours FROM skills "
+        "WHERE normalized_name = 'angular' ORDER BY id",
+    ) == [(1, "learning", 7), (50, "archived", 11), (51, "archived", 13)]
 
     _downgrade(INITIAL_REVISION)
     inspector = inspect(migration_engine)
@@ -451,8 +471,25 @@ def test_downgrade_and_reupgrade_preserve_unified_logical_data(
     assert isinstance(legacy_columns["hours"]["type"], sa.BigInteger)
     assert _fetch_all(
         migration_engine,
+        "SELECT obj_description('skills'::regclass, 'pg_class')",
+    ) == [("skillgraph:unified-compatibility-downgrade:9f4c2a1b7d8e",)]
+    assert _fetch_all(
+        migration_engine,
         "SELECT skill_id, project_id FROM skills_projects ORDER BY skill_id, project_id",
     ) == before[2]
 
     _upgrade()
     assert _logical_snapshot(migration_engine) == before
+    assert _fetch_all(
+        migration_engine,
+        "SELECT skill_id, project_id FROM skills_projects "
+        "WHERE skill_id IN (50, 51) ORDER BY skill_id, project_id",
+    ) == [(50, 3), (51, 2)]
+    with migration_engine.begin() as connection:
+        next_skill_id = connection.execute(
+            sa.text(
+                "INSERT INTO skills (name, category_id, status) "
+                "VALUES ('After round trip', 1, 'wishlist') RETURNING id"
+            )
+        ).scalar_one()
+    assert next_skill_id == 52
