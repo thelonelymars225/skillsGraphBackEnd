@@ -16,4 +16,3 @@ class Skills(Base):
     category: Mapped[str]
     status: Mapped[str]
     hours: Mapped[int]
-d

@@ -9,4 +9,9 @@ if _env.exists():
             key, value = line.split("=", 1)
             os.environ[key.strip()] = value.strip()
 
-DATABASE_URL = os.environ["DATABASE_URL"]
+DATABASE_URL = os.environ.get("DATABASE_URL")
+if DATABASE_URL is None:
+    raise RuntimeError(
+        "DATABASE_URL environment variable is not set. "
+        "Make sure it's passed via docker-compose.yml or a .env file."
+    )

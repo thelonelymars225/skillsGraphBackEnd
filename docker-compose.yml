@@ -1,20 +1,41 @@
+# Comments are provided throughout this file to help you get started.
+# If you need more help, visit the Docker Compose reference guide at
+# https://docs.docker.com/go/compose-spec-reference/
+
+# Here the instructions define your application as a service called "server".
+# This service is built from the Dockerfile in the current directory.
+# You can add other services your application may depend on here, such as a
+# database or a cache. For examples, see the Awesome Compose repository:
+# https://github.com/docker/awesome-compose
 services:
-  postgres:
-    image: postgres:16-alpine
-    container_name: skillsgraph-postgres
-    environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: skills_graph
+  server:
+    build:
+      context: .
     ports:
-      - "5432:5432"
+      - 8000:8000
+    environment:
+      - DATABASE_URL=postgresql+psycopg://meshari:123456@db:5432/postgres
+    depends_on:
+      db:
+        condition: service_healthy
+
+  db:
+    image: postgres:16
+    restart: always
+    environment:
+      - POSTGRES_USER=meshari
+      - POSTGRES_PASSWORD=123456
+      - POSTGRES_DB=postgres
+    ports:
+      - 5432:5432
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - db-data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d skills_graph"]
+      test: ["CMD", "pg_isready", "-U", "meshari", "-d", "postgres"]
       interval: 5s
       timeout: 5s
-      retries: 10
+      retries: 5
 
 volumes:
-  postgres_data:
+  db-data:
+
