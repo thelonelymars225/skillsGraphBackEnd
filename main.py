@@ -11,12 +11,17 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.database import get_db, get_engine
 from app.schemas.dashboard import ActiveSkillStatus, DashboardSummary
-from app.schemas.skills import SkillCreate, SkillRead
+from app.schemas.skills import SkillCreate, SkillRead, SkillUpdate
 from app.services.dashboard import get_dashboard_summary
 from app.services.skills import (
     ActiveSkillNameConflictError,
     SkillCategoryNotFoundError,
+    SkillNotFoundError,
+    archive_skill,
     create_skill,
+    list_skills,
+    restore_skill,
+    update_skill,
 )
 
 app = FastAPI()
@@ -25,7 +30,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
     allow_credentials=False,
-    allow_methods=["GET", "POST"],
+    allow_methods=["GET", "POST", "PUT"],
     allow_headers=["*"],
 )
 
@@ -70,6 +75,43 @@ def skill_create(
             status_code=status.HTTP_409_CONFLICT,
             detail="An active skill with this name already exists.",
         ) from error
+
+
+@app.get("/api/v1/skills", response_model=list[SkillRead])
+def skill_list(
+    include_archived: bool = False,
+    db: Session = Depends(get_db),
+) -> list[SkillRead]:
+    return list_skills(db, include_archived=include_archived)
+
+
+def _skill_operation(operation, *args):
+    try:
+        return operation(*args)
+    except SkillNotFoundError as error:
+        raise HTTPException(status_code=404, detail="Skill not found.") from error
+    except SkillCategoryNotFoundError as error:
+        raise HTTPException(status_code=404, detail="Category not found.") from error
+    except ActiveSkillNameConflictError as error:
+        raise HTTPException(
+            status_code=409,
+            detail="An active skill with this name already exists.",
+        ) from error
+
+
+@app.put("/api/v1/skills/{skill_id}", response_model=SkillRead)
+def skill_update(skill_id: int, update: SkillUpdate, db: Session = Depends(get_db)):
+    return _skill_operation(update_skill, db, skill_id, update)
+
+
+@app.post("/api/v1/skills/{skill_id}/archive", response_model=SkillRead)
+def skill_archive(skill_id: int, db: Session = Depends(get_db)):
+    return _skill_operation(archive_skill, db, skill_id)
+
+
+@app.post("/api/v1/skills/{skill_id}/restore", response_model=SkillRead)
+def skill_restore(skill_id: int, db: Session = Depends(get_db)):
+    return _skill_operation(restore_skill, db, skill_id)
 
 
 @app.get("/api/v1/health/db")
