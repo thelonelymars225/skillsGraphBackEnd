@@ -1,11 +1,7 @@
-from sqlalchemy import Integer, String, ForeignKey
-from sqlalchemy.orm import DeclarativeBase
 from sqlalchemy.orm import Mapped
 from sqlalchemy.orm import mapped_column
 
 from app.entities.base import Base
-
-
 
 # an example mapping using the base
 class Skills(Base):
@@ -16,4 +12,3 @@ class Skills(Base):
     category: Mapped[str]
     status: Mapped[str]
     hours: Mapped[int]
-d
